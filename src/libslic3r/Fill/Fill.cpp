@@ -846,7 +846,8 @@ void Layer::make_ironing()
 				ironing_params.line_spacing = config.ironing_spacing;
 				ironing_params.height 		= default_layer_height * 0.01 * config.ironing_flowrate;
 				ironing_params.speed 		= config.ironing_speed;
-				ironing_params.angle 		= config.fill_angle * M_PI / 180.;
+				// ironing_params.angle 		= config.fill_angle * M_PI / 180.;
+				ironing_params.angle 		= config.ironing_angle * M_PI / 180.;
 				ironing_params.layerm 		= layerm;
 				ironing_params.region_id    = region_id;
 				by_extruder.emplace_back(ironing_params);
