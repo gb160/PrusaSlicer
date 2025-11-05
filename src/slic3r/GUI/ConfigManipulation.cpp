@@ -385,7 +385,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
         toggle_field(el, have_raft);
 
     bool has_ironing = config->opt_bool("ironing");
-    for (auto el : { "ironing_type", "ironing_flowrate", "ironing_spacing", "ironing_speed" })
+    for (auto el : { "ironing_type", "ironing_flowrate", "ironing_spacing", "ironing_speed", "ironing_angle" })
     	toggle_field(el, has_ironing);
 
     bool have_ooze_prevention = config->opt_bool("ooze_prevention");
