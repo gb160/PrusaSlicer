@@ -2118,6 +2118,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionFloat(0.1));
 
+    def = this->add("ironing_angle", coFloat);
+    def->label = L("Ironing Angle");
+    def->category = L("Ironing");
+    def->tooltip = L("Angle of ironing passes");
+    def->sidetext = L("°");
+    def->min = 0;
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0));
+	
     def = this->add("ironing_speed", coFloat);
     def->label = L("Ironing");
     def->category = L("Speed");
