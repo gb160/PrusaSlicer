@@ -2125,7 +2125,7 @@ void PrintConfigDef::init_fff_params()
     def->sidetext = L("°");
     def->min = 0;
     def->mode = comExpert;
-    def->set_default_value(new ConfigOptionFloat(0));
+    def->set_default_value(new ConfigOptionFloat(45));
 	
     def = this->add("ironing_speed", coFloat);
     def->label = L("Ironing");
