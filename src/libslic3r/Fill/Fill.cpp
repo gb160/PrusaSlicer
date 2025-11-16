@@ -928,7 +928,8 @@ void Layer::make_ironing()
 				polys = union_safety_offset(polys);
 			}
 			// Trim the top surfaces with half the nozzle diameter.
-			ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0.5 * nozzle_dmr))));
+			// ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0.5 * nozzle_dmr))));
+			ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0 * nozzle_dmr))));
 		}
 
         // Create the filler object.
