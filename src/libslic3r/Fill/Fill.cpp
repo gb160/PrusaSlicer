@@ -767,6 +767,7 @@ void Layer::make_ironing()
 		double 		height;
 		double 		speed;
 		double 		angle;
+		bool 		trim = false;
 
 		bool operator<(const IroningParams &rhs) const {
 			if (this->extruder < rhs.extruder)
@@ -793,13 +794,19 @@ void Layer::make_ironing()
 				return true;
 			if (this->angle > rhs.angle)
 				return false;
+		    // ✅ Add trim here (using same explicit style)
+		    if (int(this->trim) < int(rhs.trim))
+		        return true;
+		    if (int(this->trim) > int(rhs.trim))
+		        return false;			
 			return false;
 		}
 
 		bool operator==(const IroningParams &rhs) const {
 			return this->extruder == rhs.extruder && this->just_infill == rhs.just_infill &&
 				   this->line_spacing == rhs.line_spacing && this->height == rhs.height && this->speed == rhs.speed &&
-				   this->angle == rhs.angle;
+				   this->angle == rhs.angle &&
+				   this->trim == rhs.trim;
 		}
 
 		LayerRegion *layerm;
@@ -848,6 +855,7 @@ void Layer::make_ironing()
 				ironing_params.speed 		= config.ironing_speed;
 				// ironing_params.angle 		= config.fill_angle * M_PI / 180.;
 				ironing_params.angle 		= config.ironing_angle * M_PI / 180.;
+				ironing_params.trim 		= config.ironing_trim;
 				ironing_params.layerm 		= layerm;
 				ironing_params.region_id    = region_id;
 				by_extruder.emplace_back(ironing_params);
@@ -927,9 +935,15 @@ void Layer::make_ironing()
 					append(polys, std::move(infills));
 				polys = union_safety_offset(polys);
 			}
-			// Trim the top surfaces with half the nozzle diameter.
-			// ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0.5 * nozzle_dmr))));
-			ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0 * nozzle_dmr))));
+
+				// If trim is enabled, trim the top surfaces with half the nozzle diameter.
+			if (ironing_params.trim) {
+				ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0.5 * nozzle_dmr))));
+			} else {
+				ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0 * nozzle_dmr))));
+			}
+			
+
 		}
 
         // Create the filler object.

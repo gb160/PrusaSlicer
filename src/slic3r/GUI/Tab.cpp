@@ -1520,6 +1520,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("ironing_flowrate", category_path + "flow-rate");
         optgroup->append_single_option_line("ironing_spacing", category_path + "spacing-between-ironing-passes");
 		optgroup->append_single_option_line("ironing_angle", category_path + "ironing-angle");
+        optgroup->append_single_option_line("ironing_trim", category_path + "ironing-trim");
 	
         optgroup = page->new_optgroup(L("Reducing printing time"));
         category_path = "infill_42#";

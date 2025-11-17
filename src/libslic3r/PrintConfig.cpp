@@ -2136,6 +2136,12 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(15));
 
+    def = this->add("ironing_trim", coBool);
+    def->label = L("Enable ironing trim");
+    def->tooltip = L("Disable the trimming of the ironing area");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(true));
+
     def = this->add("layer_gcode", coString);
     def->label = L("After layer change G-code");
     def->tooltip = L("This custom code is inserted at every layer change, right after the Z move "
