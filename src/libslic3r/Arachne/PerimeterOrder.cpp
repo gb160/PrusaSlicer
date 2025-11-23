@@ -275,13 +275,127 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
     return ordered_extrusions;
 }
 
+static PerimeterExtrusions extract_ordered_perimeter_extrusions_inner_outer_inner(
+    const PerimeterExtrusions &sorted_perimeter_extrusions) 
+{
+    std::vector<GroupedPerimeterExtrusions> grouped_extrusions;
+    std::stack<const PerimeterExtrusion *> stack;
+    std::vector<bool> visited(sorted_perimeter_extrusions.size(), false);
+    
+    // Build groups for each external perimeter
+    for (const PerimeterExtrusion &perimeter_extrusion : sorted_perimeter_extrusions) {
+        if (!perimeter_extrusion.is_external_perimeter())
+            continue;
+
+        stack.push(&perimeter_extrusion);
+        visited.assign(sorted_perimeter_extrusions.size(), false);
+
+        grouped_extrusions.emplace_back(&perimeter_extrusion);
+        while (!stack.empty()) {
+            const PerimeterExtrusion *current_extrusion = stack.top();
+            const size_t current_extrusion_idx = current_extrusion - sorted_perimeter_extrusions.data();
+
+            stack.pop();
+            visited[current_extrusion_idx] = true;
+
+            if (current_extrusion->nearest_external_perimeter == &perimeter_extrusion) {
+                grouped_extrusions.back().extrusions.emplace_back(current_extrusion);
+            }
+
+            std::vector<const PerimeterExtrusion *> available_candidates;
+            for (const PerimeterExtrusion *adjacent_extrusion : current_extrusion->adjacent_perimeter_extrusions) {
+                const size_t adjacent_extrusion_idx = adjacent_extrusion - sorted_perimeter_extrusions.data();
+                if (!visited[adjacent_extrusion_idx] && !adjacent_extrusion->is_external_perimeter() && 
+                    adjacent_extrusion->nearest_external_perimeter == &perimeter_extrusion) {
+                    available_candidates.emplace_back(adjacent_extrusion);
+                }
+            }
+
+            if (available_candidates.size() == 1) {
+                stack.push(available_candidates.front());
+            } else if (available_candidates.size() > 1) {
+                std::vector<const PerimeterExtrusion *> adjacent_extrusions = 
+                    ordered_perimeter_extrusions_to_minimize_distances(Point::Zero(), available_candidates);
+                for (auto extrusion_it = adjacent_extrusions.rbegin(); extrusion_it != adjacent_extrusions.rend(); ++extrusion_it) {
+                    stack.push(*extrusion_it);
+                }
+            }
+        }
+
+        // Apply inner-outer-inner ordering within this group
+        auto &extrusions = grouped_extrusions.back().extrusions;
+        if (extrusions.size() > 2) {
+            // Sort by depth (deepest first)
+            std::sort(extrusions.begin(), extrusions.end(), 
+                [](const PerimeterExtrusion *a, const PerimeterExtrusion *b) {
+                    return a->depth > b->depth;
+                });
+
+            // Reorder: innermost, external, then remaining (from outer to inner)
+            std::vector<const PerimeterExtrusion *> reordered;
+            
+            // 1. Add the deepest inner perimeter (highest depth)
+            if (!extrusions.empty()) {
+                reordered.push_back(extrusions.front());
+            }
+            
+            // 2. Add the external perimeter (depth == 0)
+            for (const auto *ext : extrusions) {
+                if (ext->is_external_perimeter()) {
+                    reordered.push_back(ext);
+                    break;
+                }
+            }
+            
+            // 3. Add remaining perimeters from outer to inner (ascending depth, excluding already added)
+            std::vector<const PerimeterExtrusion *> remaining;
+            for (const auto *ext : extrusions) {
+                if (ext != reordered[0] && !ext->is_external_perimeter()) {
+                    remaining.push_back(ext);
+                }
+            }
+            std::sort(remaining.begin(), remaining.end(),
+                [](const PerimeterExtrusion *a, const PerimeterExtrusion *b) {
+                    return a->depth < b->depth;
+                });
+            reordered.insert(reordered.end(), remaining.begin(), remaining.end());
+            
+            extrusions = reordered;
+        } else if (extrusions.size() == 2) {
+            // With only 2 perimeters: inner first, then outer
+            std::sort(extrusions.begin(), extrusions.end(),
+                [](const PerimeterExtrusion *a, const PerimeterExtrusion *b) {
+                    return a->depth > b->depth;
+                });
+        }
+    }
+
+    const std::vector<size_t> grouped_extrusion_order = 
+        order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
+
+    PerimeterExtrusions ordered_extrusions;
+    for (size_t order_idx : grouped_extrusion_order) {
+        for (const PerimeterExtrusion *perimeter_extrusion : grouped_extrusions[order_idx].extrusions)
+            ordered_extrusions.emplace_back(*perimeter_extrusion);
+    }
+
+    return ordered_extrusions;
+}
+
 // FIXME: From the point of better patch planning, it should be better to do ordering when we have generated all extrusions (for now, when G-Code is exported).
 // FIXME: It would be better to extract the adjacency graph of extrusions from the SkeletalTrapezoidation graph.
-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first) {
+PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, 
+                                                  const bool external_perimeters_first,
+                                                  const bool inner_outer_inner) {
     PerimeterExtrusions sorted_perimeter_extrusions = get_sorted_perimeter_extrusions_by_area(perimeters);
     construct_perimeter_extrusions_adjacency_graph(sorted_perimeter_extrusions);
     assign_nearest_external_perimeter(sorted_perimeter_extrusions);
-    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first);
+    
+    if (inner_outer_inner) {
+        return extract_ordered_perimeter_extrusions_inner_outer_inner(sorted_perimeter_extrusions);
+    } else {
+        return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first);
+    }
 }
 
 } // namespace Slic3r::Arachne::PerimeterOrder

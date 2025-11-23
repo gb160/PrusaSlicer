@@ -1127,6 +1127,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("inner_outer_inner", coBool);
+    def->label = L("Inner->Outer->Inner Wall Order");
+    def->category = L("Layers and Perimeters");
+    def->tooltip = L("Perimeters are printed in the order: Inner->Outer->Inner");
+    def->mode = comExpert;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("extra_perimeters", coBool);
     def->label = L("Extra perimeters if needed");
     def->category = L("Layers and Perimeters");
