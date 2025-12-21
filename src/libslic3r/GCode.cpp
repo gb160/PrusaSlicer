@@ -354,8 +354,9 @@ GCodeGenerator::ObjectsLayerToPrint GCodeGenerator::collect_layers_to_print(cons
         // first layer may result in skirt/brim in the air and maybe other issues.
         if (layers_to_print.size() == 1u) {
             if (!has_extrusions)
-                throw Slic3r::SlicingError(_u8L("There is an object with no extrusions in the first layer.") + "\n" +
-                                           _u8L("Object name") + ": " + object.model_object()->name);
+				BOOST_LOG_TRIVIAL(warning) << "Object has no extrusions in the first layer: " << object.model_object()->name;
+				// throw Slic3r::SlicingError(_u8L("There is an object with no extrusions in the first layer.") + "\n" +
+				//                            _u8L("Object name") + ": " + object.model_object()->name);
         }
 
         // In case there are extrusions on this layer, check there is a layer to lay it on.
