@@ -24,6 +24,14 @@ jobs:
           git clone --branch version_2.9.6 --depth 1 \
             https://github.com/prusa3d/PrusaSlicer.git src
 
+      # gmplib.org frequently times out / blocks CI runner IPs (known
+      # upstream issue: prusa3d/PrusaSlicer#14517). Swap in the GNU FTP
+      # mirror, which serves the identical file (same SHA256 hash).
+      - name: Fix flaky GMP download URL
+        run: |
+          sed -i '' 's#https://gmplib.org/download/gmp/gmp-6.2.1.tar.bz2#https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.bz2#' src/deps/+GMP/GMP.cmake
+          grep "URL http" src/deps/+GMP/GMP.cmake
+
       - name: Apply your custom-features patch
         run: |
           cd src
