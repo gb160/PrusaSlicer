@@ -1,0 +1,409 @@
+diff --git a/src/libslic3r/Arachne/PerimeterOrder.cpp b/src/libslic3r/Arachne/PerimeterOrder.cpp
+index a117e3962..1d3d4bb4d 100644
+--- a/src/libslic3r/Arachne/PerimeterOrder.cpp
++++ b/src/libslic3r/Arachne/PerimeterOrder.cpp
+@@ -275,13 +275,127 @@ static PerimeterExtrusions extract_ordered_perimeter_extrusions(const PerimeterE
+     return ordered_extrusions;
+ }
+ 
++static PerimeterExtrusions extract_ordered_perimeter_extrusions_inner_outer_inner(
++    const PerimeterExtrusions &sorted_perimeter_extrusions) 
++{
++    std::vector<GroupedPerimeterExtrusions> grouped_extrusions;
++    std::stack<const PerimeterExtrusion *> stack;
++    std::vector<bool> visited(sorted_perimeter_extrusions.size(), false);
++    
++    // Build groups for each external perimeter
++    for (const PerimeterExtrusion &perimeter_extrusion : sorted_perimeter_extrusions) {
++        if (!perimeter_extrusion.is_external_perimeter())
++            continue;
++
++        stack.push(&perimeter_extrusion);
++        visited.assign(sorted_perimeter_extrusions.size(), false);
++
++        grouped_extrusions.emplace_back(&perimeter_extrusion);
++        while (!stack.empty()) {
++            const PerimeterExtrusion *current_extrusion = stack.top();
++            const size_t current_extrusion_idx = current_extrusion - sorted_perimeter_extrusions.data();
++
++            stack.pop();
++            visited[current_extrusion_idx] = true;
++
++            if (current_extrusion->nearest_external_perimeter == &perimeter_extrusion) {
++                grouped_extrusions.back().extrusions.emplace_back(current_extrusion);
++            }
++
++            std::vector<const PerimeterExtrusion *> available_candidates;
++            for (const PerimeterExtrusion *adjacent_extrusion : current_extrusion->adjacent_perimeter_extrusions) {
++                const size_t adjacent_extrusion_idx = adjacent_extrusion - sorted_perimeter_extrusions.data();
++                if (!visited[adjacent_extrusion_idx] && !adjacent_extrusion->is_external_perimeter() && 
++                    adjacent_extrusion->nearest_external_perimeter == &perimeter_extrusion) {
++                    available_candidates.emplace_back(adjacent_extrusion);
++                }
++            }
++
++            if (available_candidates.size() == 1) {
++                stack.push(available_candidates.front());
++            } else if (available_candidates.size() > 1) {
++                std::vector<const PerimeterExtrusion *> adjacent_extrusions = 
++                    ordered_perimeter_extrusions_to_minimize_distances(Point::Zero(), available_candidates);
++                for (auto extrusion_it = adjacent_extrusions.rbegin(); extrusion_it != adjacent_extrusions.rend(); ++extrusion_it) {
++                    stack.push(*extrusion_it);
++                }
++            }
++        }
++
++        // Apply inner-outer-inner ordering within this group
++        auto &extrusions = grouped_extrusions.back().extrusions;
++        if (extrusions.size() > 2) {
++            // Sort by depth (deepest first)
++            std::sort(extrusions.begin(), extrusions.end(), 
++                [](const PerimeterExtrusion *a, const PerimeterExtrusion *b) {
++                    return a->depth > b->depth;
++                });
++
++            // Reorder: innermost, external, then remaining (from outer to inner)
++            std::vector<const PerimeterExtrusion *> reordered;
++            
++            // 1. Add the deepest inner perimeter (highest depth)
++            if (!extrusions.empty()) {
++                reordered.push_back(extrusions.front());
++            }
++            
++            // 2. Add the external perimeter (depth == 0)
++            for (const auto *ext : extrusions) {
++                if (ext->is_external_perimeter()) {
++                    reordered.push_back(ext);
++                    break;
++                }
++            }
++            
++            // 3. Add remaining perimeters from outer to inner (ascending depth, excluding already added)
++            std::vector<const PerimeterExtrusion *> remaining;
++            for (const auto *ext : extrusions) {
++                if (ext != reordered[0] && !ext->is_external_perimeter()) {
++                    remaining.push_back(ext);
++                }
++            }
++            std::sort(remaining.begin(), remaining.end(),
++                [](const PerimeterExtrusion *a, const PerimeterExtrusion *b) {
++                    return a->depth < b->depth;
++                });
++            reordered.insert(reordered.end(), remaining.begin(), remaining.end());
++            
++            extrusions = reordered;
++        } else if (extrusions.size() == 2) {
++            // With only 2 perimeters: inner first, then outer
++            std::sort(extrusions.begin(), extrusions.end(),
++                [](const PerimeterExtrusion *a, const PerimeterExtrusion *b) {
++                    return a->depth > b->depth;
++                });
++        }
++    }
++
++    const std::vector<size_t> grouped_extrusion_order = 
++        order_of_grouped_perimeter_extrusions_to_minimize_distances(grouped_extrusions, Point::Zero());
++
++    PerimeterExtrusions ordered_extrusions;
++    for (size_t order_idx : grouped_extrusion_order) {
++        for (const PerimeterExtrusion *perimeter_extrusion : grouped_extrusions[order_idx].extrusions)
++            ordered_extrusions.emplace_back(*perimeter_extrusion);
++    }
++
++    return ordered_extrusions;
++}
++
+ // FIXME: From the point of better patch planning, it should be better to do ordering when we have generated all extrusions (for now, when G-Code is exported).
+ // FIXME: It would be better to extract the adjacency graph of extrusions from the SkeletalTrapezoidation graph.
+-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, const bool external_perimeters_first) {
++PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, 
++                                                  const bool external_perimeters_first,
++                                                  const bool inner_outer_inner) {
+     PerimeterExtrusions sorted_perimeter_extrusions = get_sorted_perimeter_extrusions_by_area(perimeters);
+     construct_perimeter_extrusions_adjacency_graph(sorted_perimeter_extrusions);
+     assign_nearest_external_perimeter(sorted_perimeter_extrusions);
+-    return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first);
++    
++    if (inner_outer_inner) {
++        return extract_ordered_perimeter_extrusions_inner_outer_inner(sorted_perimeter_extrusions);
++    } else {
++        return extract_ordered_perimeter_extrusions(sorted_perimeter_extrusions, external_perimeters_first);
++    }
+ }
+ 
+ } // namespace Slic3r::Arachne::PerimeterOrder
+diff --git a/src/libslic3r/Arachne/PerimeterOrder.hpp b/src/libslic3r/Arachne/PerimeterOrder.hpp
+index f8469d917..cb1fad689 100644
+--- a/src/libslic3r/Arachne/PerimeterOrder.hpp
++++ b/src/libslic3r/Arachne/PerimeterOrder.hpp
+@@ -44,8 +44,7 @@ struct PerimeterExtrusion
+ 
+ using PerimeterExtrusions = std::vector<PerimeterExtrusion>;
+ 
+-PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first);
+-
++PerimeterExtrusions ordered_perimeter_extrusions(const Perimeters &perimeters, bool external_perimeters_first, bool inner_outer_inner = false);
+ } // namespace Slic3r::Arachne::PerimeterOrder
+ 
+ #endif // slic3r_GCode_Travels_hpp_
+diff --git a/src/libslic3r/Fill/Fill.cpp b/src/libslic3r/Fill/Fill.cpp
+index 7a0ffe39b..915ae80d2 100644
+--- a/src/libslic3r/Fill/Fill.cpp
++++ b/src/libslic3r/Fill/Fill.cpp
+@@ -767,6 +767,7 @@ void Layer::make_ironing()
+ 		double 		height;
+ 		double 		speed;
+ 		double 		angle;
++		bool 		trim = false;
+ 
+ 		bool operator<(const IroningParams &rhs) const {
+ 			if (this->extruder < rhs.extruder)
+@@ -793,13 +794,19 @@ void Layer::make_ironing()
+ 				return true;
+ 			if (this->angle > rhs.angle)
+ 				return false;
++		    // ✅ Add trim here (using same explicit style)
++		    if (int(this->trim) < int(rhs.trim))
++		        return true;
++		    if (int(this->trim) > int(rhs.trim))
++		        return false;			
+ 			return false;
+ 		}
+ 
+ 		bool operator==(const IroningParams &rhs) const {
+ 			return this->extruder == rhs.extruder && this->just_infill == rhs.just_infill &&
+ 				   this->line_spacing == rhs.line_spacing && this->height == rhs.height && this->speed == rhs.speed &&
+-				   this->angle == rhs.angle;
++				   this->angle == rhs.angle &&
++				   this->trim == rhs.trim;
+ 		}
+ 
+ 		LayerRegion *layerm;
+@@ -846,7 +853,9 @@ void Layer::make_ironing()
+ 				ironing_params.line_spacing = config.ironing_spacing;
+ 				ironing_params.height 		= default_layer_height * 0.01 * config.ironing_flowrate;
+ 				ironing_params.speed 		= config.ironing_speed;
+-				ironing_params.angle 		= config.fill_angle * M_PI / 180.;
++				// ironing_params.angle 		= config.fill_angle * M_PI / 180.;
++				ironing_params.angle 		= config.ironing_angle * M_PI / 180.;
++				ironing_params.trim 		= config.ironing_trim;
+ 				ironing_params.layerm 		= layerm;
+ 				ironing_params.region_id    = region_id;
+ 				by_extruder.emplace_back(ironing_params);
+@@ -926,8 +935,15 @@ void Layer::make_ironing()
+ 					append(polys, std::move(infills));
+ 				polys = union_safety_offset(polys);
+ 			}
+-			// Trim the top surfaces with half the nozzle diameter.
+-			ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0.5 * nozzle_dmr))));
++
++				// If trim is enabled, trim the top surfaces with half the nozzle diameter.
++			if (ironing_params.trim) {
++				ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0.5 * nozzle_dmr))));
++			} else {
++				ironing_areas = intersection_ex(polys, offset(this->lslices, - float(scale_(0 * nozzle_dmr))));
++			}
++			
++
+ 		}
+ 
+         // Create the filler object.
+diff --git a/src/libslic3r/GCode.cpp b/src/libslic3r/GCode.cpp
+index a086f689e..fcbddd1fb 100644
+--- a/src/libslic3r/GCode.cpp
++++ b/src/libslic3r/GCode.cpp
+@@ -354,8 +354,9 @@ GCodeGenerator::ObjectsLayerToPrint GCodeGenerator::collect_layers_to_print(cons
+         // first layer may result in skirt/brim in the air and maybe other issues.
+         if (layers_to_print.size() == 1u) {
+             if (!has_extrusions)
+-                throw Slic3r::SlicingError(_u8L("There is an object with no extrusions in the first layer.") + "\n" +
+-                                           _u8L("Object name") + ": " + object.model_object()->name);
++				BOOST_LOG_TRIVIAL(warning) << "Object has no extrusions in the first layer: " << object.model_object()->name;
++				// throw Slic3r::SlicingError(_u8L("There is an object with no extrusions in the first layer.") + "\n" +
++				//                            _u8L("Object name") + ": " + object.model_object()->name);
+         }
+ 
+         // In case there are extrusions on this layer, check there is a layer to lay it on.
+diff --git a/src/libslic3r/Layer.cpp b/src/libslic3r/Layer.cpp
+index 1cf9e1882..a4177edf1 100644
+--- a/src/libslic3r/Layer.cpp
++++ b/src/libslic3r/Layer.cpp
+@@ -659,6 +659,7 @@ inline bool has_compatible_layer_regions(const PrintRegionConfig &config, const
+            config.opt_serialize("perimeter_extrusion_width")     == other_config.opt_serialize("perimeter_extrusion_width") &&
+            config.thin_walls                                            == other_config.thin_walls &&
+            config.external_perimeters_first                             == other_config.external_perimeters_first &&
++           config.inner_outer_inner                             == other_config.inner_outer_inner &&
+            config.infill_overlap                                        == other_config.infill_overlap &&
+            has_compatible_dynamic_overhang_speed(config, other_config);
+ }
+diff --git a/src/libslic3r/PerimeterGenerator.cpp b/src/libslic3r/PerimeterGenerator.cpp
+index 0adc99edf..15b8d7a37 100644
+--- a/src/libslic3r/PerimeterGenerator.cpp
++++ b/src/libslic3r/PerimeterGenerator.cpp
+@@ -1121,7 +1121,7 @@ void PerimeterGenerator::process_arachne(
+         return true;
+     }());
+ 
+-    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first);
++    Arachne::PerimeterOrder::PerimeterExtrusions ordered_extrusions = Arachne::PerimeterOrder::ordered_perimeter_extrusions(perimeters, params.config.external_perimeters_first, params.config.inner_outer_inner);
+ 
+     if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(params, lower_slices_polygons_cache, ordered_extrusions); !extrusion_coll.empty())
+         out_loops.append(extrusion_coll);
+diff --git a/src/libslic3r/Preset.cpp b/src/libslic3r/Preset.cpp
+index 99bf6437c..bbd4c3e5b 100644
+--- a/src/libslic3r/Preset.cpp
++++ b/src/libslic3r/Preset.cpp
+@@ -474,11 +474,11 @@ static std::vector<std::string> s_Preset_print_options {
+     "ensure_vertical_shell_thickness", "extra_perimeters", "extra_perimeters_on_overhangs",
+     "avoid_crossing_curled_overhangs", "avoid_crossing_perimeters", "thin_walls", "overhangs",
+     "seam_position", "staggered_inner_seams", "seam_gap_distance",
+-    "external_perimeters_first", "fill_density", "fill_pattern", "top_fill_pattern", "bottom_fill_pattern",
++    "external_perimeters_first", "inner_outer_inner", "fill_density", "fill_pattern", "top_fill_pattern", "bottom_fill_pattern",
+     "scarf_seam_placement", "scarf_seam_only_on_smooth", "scarf_seam_start_height", "scarf_seam_entire_loop", "scarf_seam_length", "scarf_seam_max_segment_length", "scarf_seam_on_inner_perimeters",
+     "infill_every_layers", /*"infill_only_where_needed",*/ "solid_infill_every_layers", "fill_angle", "bridge_angle",
+     "solid_infill_below_area", "only_retract_when_crossing_perimeters", "infill_first",
+-    "ironing", "ironing_type", "ironing_flowrate", "ironing_speed", "ironing_spacing",
++    "ironing", "ironing_type", "ironing_flowrate", "ironing_speed", "ironing_spacing", "ironing_angle", "ironing_trim",
+     "max_print_speed", "max_volumetric_speed", "avoid_crossing_perimeters_max_detour",
+     "fuzzy_skin", "fuzzy_skin_thickness", "fuzzy_skin_point_dist",
+     "max_volumetric_extrusion_rate_slope_positive", "max_volumetric_extrusion_rate_slope_negative",
+diff --git a/src/libslic3r/PrintConfig.cpp b/src/libslic3r/PrintConfig.cpp
+index 872a0c395..3919f21c4 100644
+--- a/src/libslic3r/PrintConfig.cpp
++++ b/src/libslic3r/PrintConfig.cpp
+@@ -1127,6 +1127,13 @@ void PrintConfigDef::init_fff_params()
+     def->mode = comExpert;
+     def->set_default_value(new ConfigOptionBool(false));
+ 
++    def = this->add("inner_outer_inner", coBool);
++    def->label = L("Inner->Outer->Inner Wall Order");
++    def->category = L("Layers and Perimeters");
++    def->tooltip = L("Perimeters are printed in the order: Inner->Outer->Inner");
++    def->mode = comExpert;
++    def->set_default_value(new ConfigOptionBool(false));
++
+     def = this->add("extra_perimeters", coBool);
+     def->label = L("Extra perimeters if needed");
+     def->category = L("Layers and Perimeters");
+@@ -2118,6 +2125,15 @@ void PrintConfigDef::init_fff_params()
+     def->mode = comExpert;
+     def->set_default_value(new ConfigOptionFloat(0.1));
+ 
++    def = this->add("ironing_angle", coFloat);
++    def->label = L("Ironing Angle");
++    def->category = L("Ironing");
++    def->tooltip = L("Angle of ironing passes");
++    def->sidetext = L("°");
++    def->min = 0;
++    def->mode = comExpert;
++    def->set_default_value(new ConfigOptionFloat(45));
++	
+     def = this->add("ironing_speed", coFloat);
+     def->label = L("Ironing");
+     def->category = L("Speed");
+@@ -2127,6 +2143,12 @@ void PrintConfigDef::init_fff_params()
+     def->mode = comAdvanced;
+     def->set_default_value(new ConfigOptionFloat(15));
+ 
++    def = this->add("ironing_trim", coBool);
++    def->label = L("Enable ironing trim");
++    def->tooltip = L("Disable the trimming of the ironing area");
++    def->mode = comExpert;
++    def->set_default_value(new ConfigOptionBool(true));
++
+     def = this->add("layer_gcode", coString);
+     def->label = L("After layer change G-code");
+     def->tooltip = L("This custom code is inserted at every layer change, right after the Z move "
+diff --git a/src/libslic3r/PrintConfig.hpp b/src/libslic3r/PrintConfig.hpp
+index fbb14f6a3..4ac4585a6 100644
+--- a/src/libslic3r/PrintConfig.hpp
++++ b/src/libslic3r/PrintConfig.hpp
+@@ -720,6 +720,7 @@ PRINT_CONFIG_CLASS_DEFINE(
+     ((ConfigOptionFloatOrPercent,       overhang_speed_2))
+     ((ConfigOptionFloatOrPercent,       overhang_speed_3))
+     ((ConfigOptionBool,                 external_perimeters_first))
++    ((ConfigOptionBool,                 inner_outer_inner))
+     ((ConfigOptionBool,                 extra_perimeters))
+     ((ConfigOptionBool,                 extra_perimeters_on_overhangs))
+     ((ConfigOptionFloat,                fill_angle))
+@@ -743,6 +744,8 @@ PRINT_CONFIG_CLASS_DEFINE(
+     ((ConfigOptionPercent,              ironing_flowrate))
+     ((ConfigOptionFloat,                ironing_spacing))
+     ((ConfigOptionFloat,                ironing_speed))
++    ((ConfigOptionFloat,                ironing_angle))
++    ((ConfigOptionBool,                 ironing_trim))
+     // Detect bridging perimeters
+     ((ConfigOptionBool,                 overhangs))
+     ((ConfigOptionInt,                  perimeter_extruder))
+diff --git a/src/libslic3r/PrintObject.cpp b/src/libslic3r/PrintObject.cpp
+index dc0b6e454..bd7d92f91 100644
+--- a/src/libslic3r/PrintObject.cpp
++++ b/src/libslic3r/PrintObject.cpp
+@@ -728,6 +728,7 @@ bool PrintObject::invalidate_state_by_config_options(
+             || opt_key == "perimeter_extrusion_width"
+             || opt_key == "infill_overlap"
+             || opt_key == "external_perimeters_first"
++            || opt_key == "inner_outer_inner"
+             || opt_key == "arc_fitting"
+             || opt_key == "top_one_perimeter_type"
+             || opt_key == "only_one_perimeter_first_layer") {
+diff --git a/src/slic3r/GUI/ConfigManipulation.cpp b/src/slic3r/GUI/ConfigManipulation.cpp
+index b838a267d..5286b16aa 100644
+--- a/src/slic3r/GUI/ConfigManipulation.cpp
++++ b/src/slic3r/GUI/ConfigManipulation.cpp
+@@ -284,7 +284,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
+ {
+     bool have_perimeters = config->opt_int("perimeters") > 0;
+     for (auto el : { "extra_perimeters","extra_perimeters_on_overhangs", "thin_walls", "overhangs",
+-                    "seam_position","staggered_inner_seams", "external_perimeters_first", "external_perimeter_extrusion_width",
++                    "seam_position","staggered_inner_seams", "external_perimeters_first", "inner_outer_inner", "external_perimeter_extrusion_width",
+                     "perimeter_speed", "small_perimeter_speed", "external_perimeter_speed", "enable_dynamic_overhang_speeds"})
+         toggle_field(el, have_perimeters);
+ 
+@@ -385,7 +385,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
+         toggle_field(el, have_raft);
+ 
+     bool has_ironing = config->opt_bool("ironing");
+-    for (auto el : { "ironing_type", "ironing_flowrate", "ironing_spacing", "ironing_speed" })
++    for (auto el : { "ironing_type", "ironing_flowrate", "ironing_spacing", "ironing_speed", "ironing_angle", "ironing_trim" })
+     	toggle_field(el, has_ironing);
+ 
+     bool have_ooze_prevention = config->opt_bool("ooze_prevention");
+@@ -402,6 +402,14 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig* config)
+     bool have_avoid_crossing_perimeters = config->opt_bool("avoid_crossing_perimeters");
+     toggle_field("avoid_crossing_perimeters_max_detour", have_avoid_crossing_perimeters);
+ 
++bool external_perimeters_first = config->opt_bool("external_perimeters_first");
++if (external_perimeters_first && config->opt_bool("inner_outer_inner")) {
++    DynamicPrintConfig new_conf = *config;
++    new_conf.set_key_value("inner_outer_inner", new ConfigOptionBool(false));
++    apply(config, &new_conf);
++}
++toggle_field("inner_outer_inner", !external_perimeters_first);
++
+     bool have_arachne = config->opt_enum<PerimeterGeneratorType>("perimeter_generator") == PerimeterGeneratorType::Arachne;
+     toggle_field("wall_transition_length", have_arachne);
+     toggle_field("wall_transition_filter_deviation", have_arachne);
+diff --git a/src/slic3r/GUI/Tab.cpp b/src/slic3r/GUI/Tab.cpp
+index d719ec7ee..3533956a0 100644
+--- a/src/slic3r/GUI/Tab.cpp
++++ b/src/slic3r/GUI/Tab.cpp
+@@ -1489,6 +1489,7 @@ void TabPrint::build()
+         optgroup->append_single_option_line("scarf_seam_on_inner_perimeters", scarf_seam_path + "scarf-joint-on-inner-perimeters");
+ 
+         optgroup->append_single_option_line("external_perimeters_first", category_path + "external-perimeters-first");
++        optgroup->append_single_option_line("inner_outer_inner", category_path + "inner-outer-inner");
+         optgroup->append_single_option_line("gap_fill_enabled", category_path + "fill-gaps");
+         optgroup->append_single_option_line("perimeter_generator");
+ 
+@@ -1519,7 +1520,9 @@ void TabPrint::build()
+         optgroup->append_single_option_line("ironing_type", category_path + "ironing-type");
+         optgroup->append_single_option_line("ironing_flowrate", category_path + "flow-rate");
+         optgroup->append_single_option_line("ironing_spacing", category_path + "spacing-between-ironing-passes");
+-
++		optgroup->append_single_option_line("ironing_angle", category_path + "ironing-angle");
++        optgroup->append_single_option_line("ironing_trim", category_path + "ironing-trim");
++	
+         optgroup = page->new_optgroup(L("Reducing printing time"));
+         category_path = "infill_42#";
+         optgroup->append_single_option_line("automatic_infill_combination");
